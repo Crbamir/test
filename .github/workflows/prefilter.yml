@@ -2,8 +2,8 @@ name: Cloud Pre-Filter & Auto Tester
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 */4 * * *'
+  # schedule:
+  #   - cron: '0 */4 * * *'
 
 concurrency:
   group: cloud-prefilter
@@ -15,7 +15,7 @@ permissions:
 jobs:
   prefilter:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
 
     env:
       PYTHONUNBUFFERED: "1"
@@ -39,7 +39,7 @@ jobs:
       - name: Install Xray-core & Sing-box
         run: |
           # Install Xray-core
-          XRAY_VER=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+          XRAY_VER=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*//')
           if [ -z "$XRAY_VER" ]; then XRAY_VER="v25.1.30"; fi
           echo "Installing Xray $XRAY_VER..."
           curl -sL "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VER}/Xray-linux-64.zip" -o xray.zip
@@ -49,7 +49,7 @@ jobs:
           xray version
 
           # Install Sing-box
-          SB_VER=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+          SB_VER=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*//')
           if [ -z "$SB_VER" ]; then SB_VER="v1.11.4"; fi
           SB_VER_CLEAN=$(echo $SB_VER | sed 's/^v//')
           echo "Installing Sing-box $SB_VER..."
@@ -63,16 +63,3 @@ jobs:
       - name: Run Cloud Pre-Filter
         run: |
           python cloud_filter/prefilter.py
-
-      - name: Commit and Push Alive Configs
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git pull --rebase origin main || true
-          git add alive_configs.txt
-          if git diff --staged --quiet; then
-            echo "No changes in alive_configs.txt"
-          else
-            git commit -m "Auto-update: fresh alive_configs.txt [$(date -u +'%Y-%m-%d %H:%M UTC')]"
-            git push origin main
-          fi
