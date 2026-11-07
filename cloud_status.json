@@ -1,9 +1,9 @@
 {
   "status": "running",
-  "phase": "Phase 2: TCP Handshake Check",
-  "progress": "TCP: 72% (19578 active)",
+  "phase": "Phase 3: Core Probe (1/22 Batches)",
+  "progress": "50%",
   "alive_count": 0,
   "total_raw": 140995,
-  "elapsed_sec": 49,
-  "timestamp": 1794075726
+  "elapsed_sec": 73,
+  "timestamp": 1794075751
 }
