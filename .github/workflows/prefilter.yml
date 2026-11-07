@@ -4,9 +4,6 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '0 */4 * * *'
-  push:
-    paths:
-      - 'cloud_filter/**'
 
 concurrency:
   group: cloud-prefilter
@@ -49,7 +46,7 @@ jobs:
           sudo unzip -q -o xray.zip -d /usr/local/bin
           sudo chmod +x /usr/local/bin/xray
           rm -f xray.zip
-          xray -version
+          xray version
 
           # Install Sing-box
           SB_VER=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
@@ -71,6 +68,7 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main || true
           git add alive_configs.txt
           if git diff --staged --quiet; then
             echo "No changes in alive_configs.txt"
