@@ -34,7 +34,7 @@ OUTPUT_FILE = "alive_configs.txt"
 
 MAX_DL_WORKERS = 30
 MAX_TCP_WORKERS = 400
-MAX_CORE_WORKERS = 150
+MAX_CORE_WORKERS = 60
 TCP_TIMEOUT = 1.5
 CORE_TIMEOUT = 2.5
 PROBE_URL = "https://www.gstatic.com/generate_204"
@@ -510,7 +510,11 @@ def spawn_and_probe(raw_uri, seen_outbound_ips):
             except Exception:
                 pass
 
-        proc.kill()
+        try:
+            proc.kill()
+            proc.wait(timeout=0.2)
+        except Exception:
+            pass
         if os.path.exists(temp_file):
             try: os.remove(temp_file)
             except Exception: pass
