@@ -31,6 +31,7 @@ if not os.path.exists(SUBS_FILE):
     SUBS_FILE = "subscriptions.txt"
 
 OUTPUT_FILE = "alive_configs.txt"
+MAX_ALIVE_TARGET = 500
 
 MAX_DL_WORKERS = 30
 MAX_TCP_WORKERS = 400
@@ -484,7 +485,11 @@ def spawn_and_probe(raw_uri, seen_outbound_ips):
                 time.sleep(0.04)
 
         if not ready:
-            proc.kill()
+            try:
+                proc.kill()
+                proc.wait(timeout=0.2)
+            except Exception:
+                pass
             if os.path.exists(temp_file):
                 try: os.remove(temp_file)
                 except Exception: pass
@@ -496,7 +501,7 @@ def spawn_and_probe(raw_uri, seen_outbound_ips):
         }
 
         t0 = time.time()
-        res = requests.get(PROBE_URL, proxies=proxies, timeout=CORE_TIMEOUT, verify=False, allow_redirects=False)
+        res = requests.get(PROBE_URL, proxies=proxies, timeout=(1.5, CORE_TIMEOUT), verify=False, allow_redirects=False)
         ping_ms = int((time.time() - t0) * 1000)
 
         is_alive = (res.status_code == 204)
@@ -655,6 +660,13 @@ def main():
             if res:
                 uri, ping, ip = res
                 confirmed_alive.append(uri)
+
+            if len(confirmed_alive) >= MAX_ALIVE_TARGET:
+                print(f"[*] Reached target of {len(confirmed_alive)} confirmed alive configs! Finishing cloud filter early...", flush=True)
+                update_status(progress=f"Target reached: {len(confirmed_alive)} alive", alive_count=len(confirmed_alive))
+                for fut in futs:
+                    fut.cancel()
+                break
 
             if done_core % 250 == 0 or done_core == total_core:
                 pct = done_core * 100 // total_core
