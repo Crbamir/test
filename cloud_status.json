@@ -1,9 +1,9 @@
 {
   "status": "running",
   "phase": "Phase 3: Core Alive Probe (Google 204)",
-  "progress": "50%",
-  "alive_count": 0,
+  "progress": "Core: 3% (251 alive)",
+  "alive_count": 251,
   "total_raw": 140982,
-  "elapsed_sec": 72,
-  "timestamp": 1794071764
+  "elapsed_sec": 101,
+  "timestamp": 1794071793
 }
