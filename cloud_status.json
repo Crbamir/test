@@ -1,9 +1,9 @@
 {
-  "status": "running",
-  "phase": "Phase 3: Batch 22/22",
-  "progress": "Core: 100% (658 alive)",
+  "status": "completed",
+  "phase": "Cloud Filter Complete",
+  "progress": "100%",
   "alive_count": 658,
   "total_raw": 140905,
-  "elapsed_sec": 580,
-  "timestamp": 1794075598
+  "elapsed_sec": 585,
+  "timestamp": 1794075603
 }
