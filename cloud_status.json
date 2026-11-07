@@ -1,9 +1,9 @@
 {
   "status": "running",
-  "phase": "Phase 3: Core Probe (1/22 Batches)",
-  "progress": "50%",
+  "phase": "Phase 3: Batch 1/22",
+  "progress": "Batch 1/22 | Alive: 0",
   "alive_count": 0,
   "total_raw": 140905,
-  "elapsed_sec": 72,
-  "timestamp": 1794075090
+  "elapsed_sec": 73,
+  "timestamp": 1794075091
 }
