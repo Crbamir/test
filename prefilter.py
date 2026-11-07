@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-V2Ray Cloud Pre-Filter for GitHub Actions Runner
+V2Ray Cloud Pre-Filter for GitHub Actions Ultra Runner
 Author: Amir & Antigravity
-Desc: Fast, concurrent pre-filter that:
-  1. Downloads configs from subscriptions.txt
+Desc: Fast, concurrent cloud pre-filter that:
+  1. Downloads 60 subscriptions in parallel
   2. Static deduplication (protocol, host, port, path, uuid)
-  3. High-concurrency TCP handshake probe (300 workers)
-  4. Core alive probe via Xray/Sing-box (Google 204 + GeoIP dedup)
+  3. High-concurrency TCP handshake probe (400 workers + DNS cache)
+  4. Core alive probe via Xray/Sing-box (100 workers, Google 204 + GeoIP dedup)
   5. Saves clean, working, unique configs to alive_configs.txt
 """
 
@@ -18,7 +18,6 @@ import json
 import base64
 import socket
 import shutil
-import random
 import tempfile
 import subprocess
 import threading
@@ -27,30 +26,28 @@ from urllib.parse import urlparse, parse_qs, unquote
 import requests
 import urllib3
 
+# Unbuffered stdout for real-time GitHub Actions logs
+sys.stdout.reconfigure(line_buffering=True)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Configuration
 SUBS_FILE = "subscriptions.txt"
 OUTPUT_FILE = "alive_configs.txt"
 MAX_DL_WORKERS = 30
-MAX_TCP_WORKERS = 300
-MAX_CORE_WORKERS = 60
-TCP_TIMEOUT = 1.8
-CORE_TIMEOUT = 2.5
+MAX_TCP_WORKERS = 400
+MAX_CORE_WORKERS = 100
+TCP_TIMEOUT = 1.5
+CORE_TIMEOUT = 2.0
 PROBE_URL = "http://www.google.com/generate_204"
 
 # Binary paths
 XRAY_BIN = "xray" if os.name != "nt" else "xray.exe"
 SINGBOX_BIN = "sing-box" if os.name != "nt" else "sing-box.exe"
 
-# If in custom path or PATH
-if not shutil.which(XRAY_BIN):
-    if os.path.exists("/usr/local/bin/xray"):
-        XRAY_BIN = "/usr/local/bin/xray"
+if not shutil.which(XRAY_BIN) and os.path.exists("/usr/local/bin/xray"):
+    XRAY_BIN = "/usr/local/bin/xray"
 
-if not shutil.which(SINGBOX_BIN):
-    if os.path.exists("/usr/local/bin/sing-box"):
-        SINGBOX_BIN = "/usr/local/bin/sing-box"
+if not shutil.which(SINGBOX_BIN) and os.path.exists("/usr/local/bin/sing-box"):
+    SINGBOX_BIN = "/usr/local/bin/sing-box"
 
 TEMP_DIR = os.path.join(tempfile.gettempdir(), "cloud_prefilter")
 os.makedirs(TEMP_DIR, exist_ok=True)
@@ -59,6 +56,9 @@ write_lock = threading.Lock()
 port_counter = 20000
 port_lock = threading.Lock()
 
+dns_cache = {}
+dns_lock = threading.Lock()
+
 def get_next_port():
     global port_counter
     with port_lock:
@@ -66,6 +66,20 @@ def get_next_port():
         if port_counter > 55000:
             port_counter = 20000
         return port_counter
+
+def resolve_host_cached(host):
+    with dns_lock:
+        if host in dns_cache:
+            return dns_cache[host]
+    try:
+        ip = socket.gethostbyname(host)
+        with dns_lock:
+            dns_cache[host] = ip
+        return ip
+    except Exception:
+        with dns_lock:
+            dns_cache[host] = None
+        return None
 
 def safe_b64decode(s):
     s = s.strip().replace(" ", "").replace("\n", "").replace("\r", "")
@@ -92,7 +106,6 @@ def get_real_proto(uri):
     return ""
 
 def extract_config_key(uri):
-    """Returns (proto, host, port, path, uuid) for static deduplication"""
     uri = clean_raw_uri(uri)
     proto = get_real_proto(uri)
     if not proto:
@@ -127,10 +140,9 @@ def download_single_sub(url):
     configs = []
     headers = {"User-Agent": "v2rayN/6.23 Mozilla/5.0"}
     try:
-        r = requests.get(url, headers=headers, timeout=12, verify=False)
+        r = requests.get(url, headers=headers, timeout=10, verify=False)
         if r.status_code == 200:
             text = r.text.strip()
-            # If the entire response is base64 encoded
             if "://" not in text[:50] and len(text) > 40:
                 decoded = safe_b64decode(text)
                 if "://" in decoded:
@@ -145,14 +157,16 @@ def download_single_sub(url):
     return configs
 
 def check_tcp_port(item):
-    """Fast check if server host:port is listening on TCP"""
     key, raw_uri = item
     proto, host, port_str, path, uid = key
     try:
         port = int(port_str)
+        ip = resolve_host_cached(host)
+        if not ip:
+            return None
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(TCP_TIMEOUT)
-        s.connect((host, port))
+        s.connect((ip, port))
         s.close()
         return raw_uri
     except Exception:
@@ -356,7 +370,6 @@ def parse_uri_to_outbound(uri):
     return None, None
 
 def spawn_and_probe(raw_uri, seen_outbound_ips):
-    """Spawns lightweight instance and checks Google 204 + GeoIP"""
     core_type, outbound = parse_uri_to_outbound(raw_uri)
     if not outbound:
         return None
@@ -377,7 +390,6 @@ def spawn_and_probe(raw_uri, seen_outbound_ips):
         }
         cmd = [SINGBOX_BIN, "run", "-c", temp_file]
     else:
-        # Sanitize tlsSettings
         stream = outbound.get("streamSettings", {})
         if isinstance(stream, dict) and isinstance(stream.get("tlsSettings"), dict):
             stream["tlsSettings"].pop("allowInsecure", None)
@@ -400,17 +412,16 @@ def spawn_and_probe(raw_uri, seen_outbound_ips):
 
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
-        # Wait up to 0.8s for local socks port to open
         ready = False
-        for _ in range(15):
+        for _ in range(12):
             if proc.poll() is not None:
                 break
             try:
-                with socket.create_connection(("127.0.0.1", port), timeout=0.05):
+                with socket.create_connection(("127.0.0.1", port), timeout=0.04):
                     ready = True
                     break
             except OSError:
-                time.sleep(0.04)
+                time.sleep(0.03)
 
         if not ready:
             proc.kill()
@@ -424,7 +435,6 @@ def spawn_and_probe(raw_uri, seen_outbound_ips):
             "https": f"socks5h://127.0.0.1:{port}",
         }
 
-        # Probe Google 204
         t0 = time.time()
         res = requests.get(PROBE_URL, proxies=proxies, timeout=CORE_TIMEOUT, verify=False, allow_redirects=False)
         ping_ms = int((time.time() - t0) * 1000)
@@ -433,9 +443,8 @@ def spawn_and_probe(raw_uri, seen_outbound_ips):
         outbound_ip = None
 
         if is_alive:
-            # Check Outbound IP for deduplication
             try:
-                r_ip = requests.get("https://api.ip.sb/geoip", proxies=proxies, timeout=2.0, verify=False)
+                r_ip = requests.get("https://api.ip.sb/geoip", proxies=proxies, timeout=1.8, verify=False)
                 if r_ip.status_code == 200:
                     outbound_ip = r_ip.json().get("ip", "").strip()
             except Exception:
@@ -449,7 +458,6 @@ def spawn_and_probe(raw_uri, seen_outbound_ips):
         if is_alive:
             with write_lock:
                 if outbound_ip:
-                    # Allow at most 1 config per identical outbound server IP!
                     if outbound_ip in seen_outbound_ips:
                         return None
                     seen_outbound_ips.add(outbound_ip)
@@ -463,19 +471,19 @@ def spawn_and_probe(raw_uri, seen_outbound_ips):
         return None
 
 def main():
-    print("=" * 65)
-    print("   V2RAY CLOUD PRE-FILTER (GITHUB ACTIONS ULTRA RUNNER)   ")
-    print("=" * 65)
+    print("=" * 65, flush=True)
+    print("   V2RAY CLOUD PRE-FILTER (GITHUB ACTIONS ULTRA RUNNER)   ", flush=True)
+    print("=" * 65, flush=True)
 
     if not os.path.exists(SUBS_FILE):
-        print(f"Error: {SUBS_FILE} not found!")
+        print(f"Error: {SUBS_FILE} not found!", flush=True)
         sys.exit(1)
 
     with open(SUBS_FILE, "r", encoding="utf-8-sig") as f:
         sub_urls = [line.strip() for line in f if line.strip() and not line.startswith("#")]
 
-    print(f"[*] Loaded {len(sub_urls)} subscription URLs.")
-    print(f"[*] Downloading configs in parallel (Workers: {MAX_DL_WORKERS})...")
+    print(f"[*] Loaded {len(sub_urls)} subscription URLs.", flush=True)
+    print(f"[*] Downloading configs in parallel (Workers: {MAX_DL_WORKERS})...", flush=True)
 
     raw_configs = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_DL_WORKERS) as executor:
@@ -483,61 +491,68 @@ def main():
         for f in concurrent.futures.as_completed(futs):
             raw_configs.extend(f.result())
 
-    print(f"[+] Downloaded {len(raw_configs):,} raw configs.")
+    print(f"[+] Downloaded {len(raw_configs):,} raw configs.", flush=True)
 
     # Phase 1: Static Deduplication
-    print("[*] Phase 1: Performing static deduplication (protocol, host, port, path, uuid)...")
+    print("[*] Phase 1: Performing static deduplication (protocol, host, port, path, uuid)...", flush=True)
     unique_items = {}
     for uri in raw_configs:
         key = extract_config_key(uri)
         if key and key not in unique_items:
             unique_items[key] = uri
 
-    print(f"[+] Unique configs after static dedup: {len(unique_items):,} (Dropped {len(raw_configs) - len(unique_items):,} duplicates!)")
+    print(f"[+] Unique configs after static dedup: {len(unique_items):,} (Dropped {len(raw_configs) - len(unique_items):,} duplicates!)", flush=True)
 
     # Phase 2: TCP Handshake Probe
-    print(f"[*] Phase 2: High-speed TCP port handshake check (Workers: {MAX_TCP_WORKERS})...")
+    print(f"[*] Phase 2: High-speed TCP port handshake check (Workers: {MAX_TCP_WORKERS})...", flush=True)
     tcp_survivors = []
     t_tcp_start = time.time()
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_TCP_WORKERS) as executor:
         items_list = list(unique_items.items())
         futs = [executor.submit(check_tcp_port, item) for item in items_list]
+        done_tcp = 0
+        total_tcp = len(items_list)
         for f in concurrent.futures.as_completed(futs):
+            done_tcp += 1
+            if done_tcp % 3000 == 0 or done_tcp == total_tcp:
+                print(f"    -> TCP progress: {done_tcp}/{total_tcp} ({done_tcp*100//total_tcp}%) | Responding: {len(tcp_survivors)}", flush=True)
             res = f.result()
             if res:
                 tcp_survivors.append(res)
 
     tcp_elapsed = time.time() - t_tcp_start
-    print(f"[+] Responding TCP ports: {len(tcp_survivors):,} in {tcp_elapsed:.1f}s (Filtered {len(unique_items) - len(tcp_survivors):,} dead servers)")
+    print(f"[+] Responding TCP ports: {len(tcp_survivors):,} in {tcp_elapsed:.1f}s (Filtered {len(unique_items) - len(tcp_survivors):,} dead servers)", flush=True)
 
     # Phase 3: Core Probe via Xray/Sing-box
-    print(f"[*] Phase 3: Full Core Handshake & Google 204 Probe (Workers: {MAX_CORE_WORKERS})...")
+    print(f"[*] Phase 3: Core Handshake & Google 204 Probe (Workers: {MAX_CORE_WORKERS})...", flush=True)
     confirmed_alive = []
     seen_outbound_ips = set()
     t_core_start = time.time()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CORE_WORKERS) as executor:
         futs = [executor.submit(spawn_and_probe, uri, seen_outbound_ips) for uri in tcp_survivors]
+        done_core = 0
+        total_core = len(tcp_survivors)
         for f in concurrent.futures.as_completed(futs):
+            done_core += 1
+            if done_core % 250 == 0 or done_core == total_core:
+                print(f"    -> Core progress: {done_core}/{total_core} ({done_core*100//total_core}%) | Confirmed Alive: {len(confirmed_alive)}", flush=True)
             res = f.result()
             if res:
                 uri, ping, ip = res
                 confirmed_alive.append(uri)
-                if len(confirmed_alive) % 100 == 0:
-                    print(f"    -> Confirmed {len(confirmed_alive)} alive nodes (Latest Ping: {ping}ms | IP: {ip or 'N/A'})")
 
     core_elapsed = time.time() - t_core_start
-    print(f"[+] Fully confirmed ALIVE & UNIQUE nodes: {len(confirmed_alive):,} in {core_elapsed:.1f}s!")
+    print(f"[+] Fully confirmed ALIVE & UNIQUE nodes: {len(confirmed_alive):,} in {core_elapsed:.1f}s!", flush=True)
 
-    # Write output file
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         for c in confirmed_alive:
             f.write(c + "\n")
 
     file_size_kb = os.path.getsize(OUTPUT_FILE) / 1024
-    print("=" * 65)
-    print(f"✅ SUCCESS: Wrote {len(confirmed_alive):,} alive configs to '{OUTPUT_FILE}' ({file_size_kb:.1f} KB)")
-    print("=" * 65)
+    print("=" * 65, flush=True)
+    print(f"✅ SUCCESS: Wrote {len(confirmed_alive):,} alive configs to '{OUTPUT_FILE}' ({file_size_kb:.1f} KB)", flush=True)
+    print("=" * 65, flush=True)
 
 if __name__ == "__main__":
     main()
