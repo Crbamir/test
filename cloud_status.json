@@ -1,9 +1,9 @@
 {
-  "status": "idle",
-  "phase": "Ready to Start",
+  "status": "running",
+  "phase": "Reading Subscriptions",
   "progress": "0%",
   "alive_count": 0,
   "total_raw": 0,
   "elapsed_sec": 0,
-  "timestamp": 0
+  "timestamp": 1794062346
 }
