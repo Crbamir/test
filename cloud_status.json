@@ -1,9 +1,9 @@
 {
   "status": "running",
-  "phase": "Reading Subscriptions",
+  "phase": "Downloading 45 Subscriptions",
   "progress": "0%",
   "alive_count": 0,
   "total_raw": 0,
   "elapsed_sec": 0,
-  "timestamp": 1794071692
+  "timestamp": 1794071693
 }
