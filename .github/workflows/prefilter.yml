@@ -2,8 +2,9 @@ name: Cloud Pre-Filter & Auto Tester
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 */4 * * *'
+  push:
+    paths:
+      - '.trigger'
 
 concurrency:
   group: cloud-prefilter
