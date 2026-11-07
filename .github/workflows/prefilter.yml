@@ -2,11 +2,8 @@ name: Cloud Pre-Filter & Auto Tester
 
 on:
   workflow_dispatch:
-    inputs:
-      mode:
-        description: 'Run mode'
-        default: 'fast'
-        required: false
+  schedule:
+    - cron: '0 */4 * * *'
 
 concurrency:
   group: cloud-prefilter
@@ -18,7 +15,7 @@ permissions:
 jobs:
   prefilter:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     env:
       PYTHONUNBUFFERED: "1"
@@ -41,7 +38,6 @@ jobs:
 
       - name: Install Xray-core & Sing-box
         run: |
-          # Install Xray-core
           XRAY_VER=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*//')
           if [ -z "$XRAY_VER" ]; then XRAY_VER="v25.1.30"; fi
           echo "Installing Xray $XRAY_VER..."
@@ -51,7 +47,6 @@ jobs:
           rm -f xray.zip
           xray version
 
-          # Install Sing-box
           SB_VER=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*//')
           if [ -z "$SB_VER" ]; then SB_VER="v1.11.4"; fi
           SB_VER_CLEAN=$(echo $SB_VER | sed 's/^v//')
