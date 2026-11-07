@@ -34,7 +34,7 @@ OUTPUT_FILE = "alive_configs.txt"
 
 MAX_DL_WORKERS = 30
 MAX_TCP_WORKERS = 400
-MAX_CORE_WORKERS = 100
+MAX_CORE_WORKERS = 150
 TCP_TIMEOUT = 1.5
 CORE_TIMEOUT = 2.0
 PROBE_URL = "http://www.google.com/generate_204"
@@ -464,7 +464,7 @@ def spawn_and_probe(raw_uri, seen_outbound_ips):
             }],
             "outbounds": [outbound, {"protocol": "freedom", "tag": "direct"}],
         }
-        cmd = [XRAY_BIN, "-c", temp_file]
+        cmd = [XRAY_BIN, "run", "-c", temp_file]
 
     try:
         with open(temp_file, "w", encoding="utf-8") as f:
@@ -529,6 +529,38 @@ def spawn_and_probe(raw_uri, seen_outbound_ips):
             try: os.remove(temp_file)
             except Exception: pass
         return None
+
+
+def publish_alive_configs_to_github(confirmed_alive):
+    token = os.environ.get("GITHUB_TOKEN")
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    if not token or not repo:
+        return
+    try:
+        url = f"https://api.github.com/repos/{repo}/contents/alive_configs.txt"
+        headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3+json"}
+        sha = None
+        try:
+            r_get = requests.get(url, headers=headers, timeout=5)
+            if r_get.status_code == 200:
+                sha = r_get.json().get("sha")
+        except Exception:
+            pass
+
+        content_str = "\n".join(confirmed_alive) + "\n"
+        body = {
+            "message": f"Auto-update: fresh alive_configs.txt ({len(confirmed_alive)} alive)",
+            "content": base64.b64encode(content_str.encode("utf-8")).decode("utf-8")
+        }
+        if sha:
+            body["sha"] = sha
+        res = requests.put(url, headers=headers, json=body, timeout=20)
+        if res.status_code in [200, 201]:
+            print(f"[+] Direct API push for alive_configs.txt succeeded ({len(confirmed_alive)} configs)", flush=True)
+        else:
+            print(f"[-] Direct API push status: {res.status_code}", flush=True)
+    except Exception as e:
+        print(f"[-] Direct API push failed: {e}", flush=True)
 
 def main():
     print("=" * 65, flush=True)
@@ -637,6 +669,7 @@ def main():
     print(f"✅ SUCCESS: Wrote {len(confirmed_alive):,} alive configs to '{OUTPUT_FILE}' ({file_size_kb:.1f} KB)", flush=True)
     print("=" * 65, flush=True)
 
+    publish_alive_configs_to_github(confirmed_alive)
     update_status(status="completed", phase="Cloud Filter Complete", progress="100%", alive_count=len(confirmed_alive))
     publish_status_to_github()
 
