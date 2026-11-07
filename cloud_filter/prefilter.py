@@ -35,7 +35,7 @@ TEMP_OUTPUT_FILE = "alive_configs_temp.txt"
 
 MAX_DL_WORKERS = 30
 MAX_TCP_WORKERS = 400
-MAX_CORE_WORKERS = 120
+MAX_CORE_WORKERS = 150
 TCP_TIMEOUT = 1.5
 CORE_TIMEOUT = 2.0
 PROBE_URL = "https://www.gstatic.com/generate_204"
@@ -677,7 +677,7 @@ def main():
     print(f"[+] Responding TCP ports: {len(tcp_survivors):,} in {tcp_elapsed:.1f}s", flush=True)
 
     # Phase 3: Core Probe via Xray/Sing-box (Chunked Batches with Automatic Process Cleanup)
-    CHUNK_SIZE = 1200
+    CHUNK_SIZE = 800
     total_survivors = len(tcp_survivors)
     total_chunks = (total_survivors + CHUNK_SIZE - 1) // CHUNK_SIZE
     print(f"[*] Phase 3: Core Handshake & Google 204 Probe in {total_chunks} Batches of {CHUNK_SIZE} (Workers: {MAX_CORE_WORKERS})...", flush=True)
