@@ -570,3 +570,6 @@ vless://7b8ad3a1-fc0a-4fe4-8844-56e606b6eabb@147.45.71.104:8444?encryption=none&
 vless://976f82d9-0e6b-40ed-9c09-cafd06c4bc98@217.60.179.166:443?security=reality&flow=xtls-rprx-vision&fp=firefox&pbk=jbiddtGRgeBvlkjbuA3aU-WPjKgEX87tOVh1mFfvOUI&sid=16e0f049&sni=de166.mech-pro.online#4Jadi-0126aa259e
 vless://c166ca49-4af0-416d-8411-2100f7bde9fe@66.154.101.36:443/?type=tcp&encryption=none&flow=&sni=www.tesla.com&fp=firefox&security=reality&pbk=t_aj99mkcVXDY_7xI9RhWyEY3khupiGiDsGKEJ7EajM&sid=5590a9bae52e0586#4Jadi-76336b8170
 vless://a35c508f-4d5d-4531-842e-6e9d43c762c0@swo2.nexfile.net:4443?type=xhttp&security=tls&fp=chrome&sni=swo2.nexfile.net&path=/api/v1/sync/&mode=auto#4Mohsen-59bad1bbe8
+vless://c90395e6-2140-47ad-a54d-9b166729d3ef@147.45.175.81:443?fp=random&security=tls&serviceName=grpc-ru&sni=xsru1.ddnsfree.com&type=grpc#4Sarina-fa64cbd678
+vless://f333ac5d-1e0b-4947-a123-7bb605803ad8@209.200.246.203:2066?encryption=none&flow=xtls-rprx-vision&fp=firefox&pbk=kLCwYNBhCg68BQah9El1lNg6GQ7-7Y7xfTtIs6MiTEg&security=reality&sid=d18f4e&sni=tiktok.com&type=tcp#4Sarina-bd1127909e
+vless://fafc7c16-f890-45ee-a856-02df225172dd@31.77.10.167:24503?encryption=none&flow=xtls-rprx-vision&pbk=iiApJD_tVRzp1t8EfIpG7T4dnx-O0ai5nkzD9GUV9Fc&security=reality&sid=02ea11017a1c951f&sni=nl3-gkv6mb.vpvr4ib84nuv6hdkt.ru&type=tcp&fp=chrome#4Jadi-318ffaa7f0
