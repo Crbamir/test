@@ -1,9 +1,9 @@
 {
   "status": "running",
-  "phase": "Static Deduplication",
-  "progress": "10%",
+  "phase": "Phase 2: TCP Handshake Check",
+  "progress": "15%",
   "alive_count": 0,
   "total_raw": 141907,
-  "elapsed_sec": 3,
-  "timestamp": 1794060767
+  "elapsed_sec": 6,
+  "timestamp": 1794060771
 }
