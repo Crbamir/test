@@ -31,12 +31,13 @@ if not os.path.exists(SUBS_FILE):
     SUBS_FILE = "subscriptions.txt"
 
 OUTPUT_FILE = "alive_configs.txt"
+TEMP_OUTPUT_FILE = "alive_configs_temp.txt"
 
 MAX_DL_WORKERS = 30
 MAX_TCP_WORKERS = 400
-MAX_CORE_WORKERS = 70
+MAX_CORE_WORKERS = 120
 TCP_TIMEOUT = 1.5
-CORE_TIMEOUT = 2.5
+CORE_TIMEOUT = 2.0
 PROBE_URL = "https://www.gstatic.com/generate_204"
 
 XRAY_BIN = "xray" if os.name != "nt" else "xray.exe"
@@ -568,31 +569,42 @@ def publish_alive_configs_to_github(confirmed_alive):
     repo = os.environ.get("GITHUB_REPOSITORY")
     if not token or not repo:
         return
-    try:
-        url = f"https://api.github.com/repos/{repo}/contents/alive_configs.txt"
-        headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3+json"}
-        sha = None
-        try:
-            r_get = requests.get(url, headers=headers, timeout=5)
-            if r_get.status_code == 200:
-                sha = r_get.json().get("sha")
-        except Exception:
-            pass
+    
+    content_str = "\n".join(confirmed_alive) + "\n"
+    encoded_content = base64.b64encode(content_str.encode("utf-8")).decode("utf-8")
+    url = f"https://api.github.com/repos/{repo}/contents/alive_configs.txt"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3+json"}
 
-        content_str = "\n".join(confirmed_alive) + "\n"
-        body = {
-            "message": f"Auto-update: fresh alive_configs.txt ({len(confirmed_alive)} alive)",
-            "content": base64.b64encode(content_str.encode("utf-8")).decode("utf-8")
-        }
-        if sha:
-            body["sha"] = sha
-        res = requests.put(url, headers=headers, json=body, timeout=20)
-        if res.status_code in [200, 201]:
-            print(f"[+] Direct API push for alive_configs.txt succeeded ({len(confirmed_alive)} configs)", flush=True)
-        else:
-            print(f"[-] Direct API push status: {res.status_code}", flush=True)
-    except Exception as e:
-        print(f"[-] Direct API push failed: {e}", flush=True)
+    for attempt in range(5):
+        try:
+            sha = None
+            try:
+                r_get = requests.get(url, headers=headers, timeout=8)
+                if r_get.status_code == 200:
+                    sha = r_get.json().get("sha")
+            except Exception:
+                pass
+
+            body = {
+                "message": f"Auto-update: fresh alive_configs.txt ({len(confirmed_alive)} alive)",
+                "content": encoded_content
+            }
+            if sha:
+                body["sha"] = sha
+            res = requests.put(url, headers=headers, json=body, timeout=25)
+            if res.status_code in [200, 201]:
+                print(f"[+] Direct API push for alive_configs.txt succeeded ({len(confirmed_alive)} configs)", flush=True)
+                return True
+            elif res.status_code == 409:
+                print(f"[*] API push 409 conflict, retrying with fresh sha (attempt {attempt+1}/5)...", flush=True)
+                time.sleep(1.5)
+                continue
+            else:
+                print(f"[-] Direct API push status: {res.status_code}", flush=True)
+        except Exception as e:
+            print(f"[-] Direct API push attempt {attempt+1} failed: {e}", flush=True)
+            time.sleep(1.5)
+    return False
 
 def main():
     print("=" * 65, flush=True)
@@ -677,8 +689,11 @@ def main():
     t_core_start = time.time()
     done_total = 0
 
-    # Initialize empty output file for appending
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+    # Initialize clean temporary output file for THIS scan run only
+    if os.path.exists(TEMP_OUTPUT_FILE):
+        try: os.remove(TEMP_OUTPUT_FILE)
+        except Exception: pass
+    with open(TEMP_OUTPUT_FILE, "w", encoding="utf-8") as f:
         pass
 
     for chunk_idx in range(total_chunks):
@@ -701,8 +716,8 @@ def main():
                     uri, ping, ip = res
                     confirmed_alive.append(uri)
                     chunk_alive.append(uri)
-                    # Immediately append newly alive config to the single output file!
-                    with open(OUTPUT_FILE, "a", encoding="utf-8") as f_out:
+                    # Append newly alive config to temporary output file for this run
+                    with open(TEMP_OUTPUT_FILE, "a", encoding="utf-8") as f_out:
                         f_out.write(uri + "\n")
 
                 if chunk_done % 200 == 0 or chunk_done == len(current_chunk):
@@ -714,23 +729,36 @@ def main():
         cleanup_zombies_and_temp()
         time.sleep(0.5)
 
-        # Incrementally publish current alive configs to GitHub every batch!
+        # Update live progress to GitHub status json
         if len(chunk_alive) > 0 or chunk_idx % 2 == 0 or chunk_idx == total_chunks - 1:
-            publish_alive_configs_to_github(confirmed_alive)
             publish_status_to_github()
 
         print(f"[+] Batch {chunk_idx + 1} complete (+{len(chunk_alive)} alive). Processes & temp storage wiped. Total alive so far: {len(confirmed_alive):,}", flush=True)
 
     core_elapsed = time.time() - t_core_start
-    file_size_kb = os.path.getsize(OUTPUT_FILE) / 1024 if os.path.exists(OUTPUT_FILE) else 0
 
     print("=" * 65, flush=True)
     print(f"✅ 100% COMPLETE: Scanned all {total_survivors:,} configs across {total_chunks} batches!", flush=True)
-    print(f"   Total Fully Confirmed ALIVE & UNIQUE nodes: {len(confirmed_alive):,} ({file_size_kb:.1f} KB) in {core_elapsed:.1f}s", flush=True)
+    print(f"   Total Fully Confirmed ALIVE & UNIQUE nodes: {len(confirmed_alive):,} in {core_elapsed:.1f}s", flush=True)
     print("=" * 65, flush=True)
 
-    publish_alive_configs_to_github(confirmed_alive)
-    update_status(status="completed", phase="Cloud Filter Complete", progress="100%", alive_count=len(confirmed_alive))
+    # Scan 100% complete: Atomically place into main alive_configs.txt (replacing any previous scan results)
+    unique_alive = list(dict.fromkeys(confirmed_alive))
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f_out:
+        for uri in unique_alive:
+            f_out.write(uri + "\n")
+
+    file_size_kb = os.path.getsize(OUTPUT_FILE) / 1024 if os.path.exists(OUTPUT_FILE) else 0
+    print(f"[+] Final {OUTPUT_FILE} created with {len(unique_alive):,} configs ({file_size_kb:.1f} KB).", flush=True)
+
+    # Clean up temp file
+    if os.path.exists(TEMP_OUTPUT_FILE):
+        try: os.remove(TEMP_OUTPUT_FILE)
+        except Exception: pass
+
+    # Publish clean final alive_configs.txt to GitHub
+    publish_alive_configs_to_github(unique_alive)
+    update_status(status="completed", phase="Cloud Filter Complete", progress="100%", alive_count=len(unique_alive))
     publish_status_to_github()
 
 if __name__ == "__main__":
