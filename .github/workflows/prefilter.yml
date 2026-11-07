@@ -8,13 +8,20 @@ on:
     paths:
       - 'subscriptions.txt'
 
+concurrency:
+  group: cloud-prefilter
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
 jobs:
   prefilter:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
+
+    env:
+      PYTHONUNBUFFERED: "1"
 
     steps:
       - name: Checkout Repository
