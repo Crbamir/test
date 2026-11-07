@@ -36,8 +36,8 @@ MAX_DL_WORKERS = 30
 MAX_TCP_WORKERS = 400
 MAX_CORE_WORKERS = 150
 TCP_TIMEOUT = 1.5
-CORE_TIMEOUT = 2.0
-PROBE_URL = "http://www.google.com/generate_204"
+CORE_TIMEOUT = 2.5
+PROBE_URL = "https://www.gstatic.com/generate_204"
 
 XRAY_BIN = "xray" if os.name != "nt" else "xray.exe"
 SINGBOX_BIN = "sing-box" if os.name != "nt" else "sing-box.exe"
@@ -473,15 +473,15 @@ def spawn_and_probe(raw_uri, seen_outbound_ips):
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
         ready = False
-        for _ in range(12):
+        for _ in range(20):
             if proc.poll() is not None:
                 break
             try:
-                with socket.create_connection(("127.0.0.1", port), timeout=0.04):
+                with socket.create_connection(("127.0.0.1", port), timeout=0.06):
                     ready = True
                     break
             except OSError:
-                time.sleep(0.03)
+                time.sleep(0.04)
 
         if not ready:
             proc.kill()
