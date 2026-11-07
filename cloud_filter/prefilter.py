@@ -31,11 +31,10 @@ if not os.path.exists(SUBS_FILE):
     SUBS_FILE = "subscriptions.txt"
 
 OUTPUT_FILE = "alive_configs.txt"
-MAX_ALIVE_TARGET = 500
 
 MAX_DL_WORKERS = 30
 MAX_TCP_WORKERS = 400
-MAX_CORE_WORKERS = 60
+MAX_CORE_WORKERS = 70
 TCP_TIMEOUT = 1.5
 CORE_TIMEOUT = 2.5
 PROBE_URL = "https://www.gstatic.com/generate_204"
@@ -540,6 +539,30 @@ def spawn_and_probe(raw_uri, seen_outbound_ips):
         return None
 
 
+def cleanup_zombies_and_temp():
+    """Kills orphan xray/sing-box processes and cleans temp files between batches."""
+    try:
+        if os.name != "nt":
+            subprocess.run(["pkill", "-9", "-f", "xray"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["pkill", "-9", "-f", "sing-box"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            subprocess.run(["taskkill", "/F", "/IM", "xray.exe", "/T"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["taskkill", "/F", "/IM", "sing-box.exe", "/T"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+    try:
+        if os.path.exists(TEMP_DIR):
+            for fname in os.listdir(TEMP_DIR):
+                fpath = os.path.join(TEMP_DIR, fname)
+                try:
+                    if os.path.isfile(fpath):
+                        os.remove(fpath)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
 def publish_alive_configs_to_github(confirmed_alive):
     token = os.environ.get("GITHUB_TOKEN")
     repo = os.environ.get("GITHUB_REPOSITORY")
@@ -641,48 +664,69 @@ def main():
     tcp_elapsed = time.time() - t_tcp_start
     print(f"[+] Responding TCP ports: {len(tcp_survivors):,} in {tcp_elapsed:.1f}s", flush=True)
 
-    # Phase 3: Core Probe via Xray/Sing-box
-    print(f"[*] Phase 3: Core Handshake & Google 204 Probe (Workers: {MAX_CORE_WORKERS})...", flush=True)
-    update_status(phase="Phase 3: Core Alive Probe (Google 204)", progress="50%")
+    # Phase 3: Core Probe via Xray/Sing-box (Chunked Batches with Automatic Process Cleanup)
+    CHUNK_SIZE = 1200
+    total_survivors = len(tcp_survivors)
+    total_chunks = (total_survivors + CHUNK_SIZE - 1) // CHUNK_SIZE
+    print(f"[*] Phase 3: Core Handshake & Google 204 Probe in {total_chunks} Batches of {CHUNK_SIZE} (Workers: {MAX_CORE_WORKERS})...", flush=True)
+    update_status(phase=f"Phase 3: Core Probe (1/{total_chunks} Batches)", progress="50%")
     publish_status_to_github()
 
     confirmed_alive = []
     seen_outbound_ips = set()
     t_core_start = time.time()
+    done_total = 0
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CORE_WORKERS) as executor:
-        futs = [executor.submit(spawn_and_probe, uri, seen_outbound_ips) for uri in tcp_survivors]
-        done_core = 0
-        total_core = len(tcp_survivors)
-        for f in concurrent.futures.as_completed(futs):
-            done_core += 1
-            res = f.result()
-            if res:
-                uri, ping, ip = res
-                confirmed_alive.append(uri)
+    # Initialize empty output file for appending
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        pass
 
-            if len(confirmed_alive) >= MAX_ALIVE_TARGET:
-                print(f"[*] Reached target of {len(confirmed_alive)} confirmed alive configs! Finishing cloud filter early...", flush=True)
-                update_status(progress=f"Target reached: {len(confirmed_alive)} alive", alive_count=len(confirmed_alive))
-                for fut in futs:
-                    fut.cancel()
-                break
+    for chunk_idx in range(total_chunks):
+        chunk_start = chunk_idx * CHUNK_SIZE
+        chunk_end = min(chunk_start + CHUNK_SIZE, total_survivors)
+        current_chunk = tcp_survivors[chunk_start:chunk_end]
+        
+        print(f"\n--- [BATCH {chunk_idx + 1}/{total_chunks}] Testing nodes {chunk_start + 1:,} to {chunk_end:,} ({len(current_chunk):,} configs) ---", flush=True)
+        update_status(phase=f"Phase 3: Batch {chunk_idx + 1}/{total_chunks}", progress=f"Batch {chunk_idx + 1}/{total_chunks} | Alive: {len(confirmed_alive)}")
 
-            if done_core % 250 == 0 or done_core == total_core:
-                pct = done_core * 100 // total_core
-                print(f"    -> Core progress: {done_core}/{total_core} ({pct}%) | Alive: {len(confirmed_alive)}", flush=True)
-                update_status(progress=f"Core: {pct}% ({len(confirmed_alive)} alive)", alive_count=len(confirmed_alive))
+        chunk_alive = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CORE_WORKERS) as executor:
+            futs = [executor.submit(spawn_and_probe, uri, seen_outbound_ips) for uri in current_chunk]
+            chunk_done = 0
+            for f in concurrent.futures.as_completed(futs):
+                chunk_done += 1
+                done_total += 1
+                res = f.result()
+                if res:
+                    uri, ping, ip = res
+                    confirmed_alive.append(uri)
+                    chunk_alive.append(uri)
+                    # Immediately append newly alive config to the single output file!
+                    with open(OUTPUT_FILE, "a", encoding="utf-8") as f_out:
+                        f_out.write(uri + "\n")
+
+                if chunk_done % 200 == 0 or chunk_done == len(current_chunk):
+                    pct = done_total * 100 // total_survivors
+                    print(f"    -> Progress: {done_total}/{total_survivors} ({pct}%) | Batch Alive: +{len(chunk_alive)} | Total Alive: {len(confirmed_alive)}", flush=True)
+                    update_status(progress=f"Core: {pct}% ({len(confirmed_alive)} alive)", alive_count=len(confirmed_alive))
+
+        # End of batch: completely kill all lingering core processes and clean temp directory!
+        cleanup_zombies_and_temp()
+        time.sleep(0.5)
+
+        # Incrementally publish current alive configs to GitHub every batch!
+        if len(chunk_alive) > 0 or chunk_idx % 2 == 0 or chunk_idx == total_chunks - 1:
+            publish_alive_configs_to_github(confirmed_alive)
+            publish_status_to_github()
+
+        print(f"[+] Batch {chunk_idx + 1} complete (+{len(chunk_alive)} alive). Processes & temp storage wiped. Total alive so far: {len(confirmed_alive):,}", flush=True)
 
     core_elapsed = time.time() - t_core_start
-    print(f"[+] Fully confirmed ALIVE & UNIQUE nodes: {len(confirmed_alive):,} in {core_elapsed:.1f}s!", flush=True)
+    file_size_kb = os.path.getsize(OUTPUT_FILE) / 1024 if os.path.exists(OUTPUT_FILE) else 0
 
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        for c in confirmed_alive:
-            f.write(c + "\n")
-
-    file_size_kb = os.path.getsize(OUTPUT_FILE) / 1024
     print("=" * 65, flush=True)
-    print(f"✅ SUCCESS: Wrote {len(confirmed_alive):,} alive configs to '{OUTPUT_FILE}' ({file_size_kb:.1f} KB)", flush=True)
+    print(f"✅ 100% COMPLETE: Scanned all {total_survivors:,} configs across {total_chunks} batches!", flush=True)
+    print(f"   Total Fully Confirmed ALIVE & UNIQUE nodes: {len(confirmed_alive):,} ({file_size_kb:.1f} KB) in {core_elapsed:.1f}s", flush=True)
     print("=" * 65, flush=True)
 
     publish_alive_configs_to_github(confirmed_alive)
