@@ -1,9 +1,9 @@
 {
-  "status": "completed",
-  "phase": "Cloud Filter Complete",
-  "progress": "100%",
-  "alive_count": 575,
-  "total_raw": 140995,
-  "elapsed_sec": 747,
-  "timestamp": 1794076424
+  "status": "running",
+  "phase": "Reading Subscriptions",
+  "progress": "0%",
+  "alive_count": 0,
+  "total_raw": 0,
+  "elapsed_sec": 0,
+  "timestamp": 1794076444
 }
