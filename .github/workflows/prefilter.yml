@@ -1,9 +1,12 @@
 name: Cloud Pre-Filter & Auto Tester
 
 on:
-  workflow_dispatch: {}
-  # schedule:
-  #   - cron: '0 */4 * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Run mode'
+        default: 'fast'
+        required: false
 
 concurrency:
   group: cloud-prefilter
