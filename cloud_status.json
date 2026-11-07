@@ -1,9 +1,9 @@
 {
   "status": "running",
-  "phase": "Phase 2: TCP Handshake Check",
-  "progress": "TCP: 78% (23070 active)",
+  "phase": "Phase 3: Core Alive Probe (Google 204)",
+  "progress": "50%",
   "alive_count": 0,
   "total_raw": 140982,
-  "elapsed_sec": 46,
-  "timestamp": 1794071738
+  "elapsed_sec": 72,
+  "timestamp": 1794071764
 }
