@@ -1,9 +1,9 @@
 {
   "status": "running",
-  "phase": "Phase 3: Batch 21/37",
-  "progress": "Core: 58% (548 alive)",
+  "phase": "Phase 3: Batch 22/37",
+  "progress": "Core: 60% (548 alive)",
   "alive_count": 548,
   "total_raw": 167728,
-  "elapsed_sec": 580,
-  "timestamp": 1794081641
+  "elapsed_sec": 598,
+  "timestamp": 1794081659
 }
