@@ -138,12 +138,11 @@ def resolve_host_cached(host):
             return dns_cache[host]
     try:
         ip = socket.gethostbyname(host)
-        with dns_lock:
-            dns_cache[host] = ip
+        if ip:
+            with dns_lock:
+                dns_cache[host] = ip
         return ip
     except Exception:
-        with dns_lock:
-            dns_cache[host] = None
         return None
 
 def safe_b64decode(s):
@@ -221,21 +220,52 @@ def download_single_sub(url):
         pass
     return configs
 
-def check_tcp_port(item):
+def check_tcp_port(item, timeout_sec=TCP_TIMEOUT):
     key, raw_uri = item
     proto, host, port_str, path, uid = key
     try:
         port = int(port_str)
         ip = resolve_host_cached(host)
         if not ip:
-            return None
+            return False, item
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(TCP_TIMEOUT)
+        s.settimeout(timeout_sec)
         s.connect((ip, port))
         s.close()
-        return raw_uri
+        return True, raw_uri
     except Exception:
-        return None
+        return False, item
+
+def run_tcp_round(items_list, round_label, timeout_sec, existing_count=0):
+    """Run one concurrent TCP port handshake pass and return (survivors, failed_items)."""
+    survivors = []
+    failed_items = []
+    total_tcp = len(items_list)
+    if total_tcp == 0:
+        return survivors, failed_items
+
+    log_step = 3000 if total_tcp >= 6000 else 1000
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_TCP_WORKERS) as executor:
+        futs = [executor.submit(check_tcp_port, item, timeout_sec) for item in items_list]
+        done_tcp = 0
+        for f in concurrent.futures.as_completed(futs):
+            done_tcp += 1
+            ok, payload = f.result()
+            if ok:
+                survivors.append(payload)
+            else:
+                failed_items.append(payload)
+
+            if done_tcp % log_step == 0 or done_tcp == total_tcp:
+                pct = done_tcp * 100 // total_tcp
+                total_alive_now = existing_count + len(survivors)
+                print(
+                    f"    -> TCP {round_label}: {done_tcp}/{total_tcp} ({pct}%) | Round Alive: +{len(survivors)} | Total TCP Alive: {total_alive_now}",
+                    flush=True,
+                )
+                update_status(progress=f"TCP {round_label}: {pct}% ({total_alive_now} active)")
+
+    return survivors, failed_items
 
 def parse_uri_to_outbound(uri):
     uri = clean_raw_uri(uri)
@@ -434,7 +464,7 @@ def parse_uri_to_outbound(uri):
         pass
     return None, None
 
-def spawn_and_probe(raw_uri):
+def spawn_and_probe(raw_uri, seen_outbound_ips):
     core_type, outbound = parse_uri_to_outbound(raw_uri)
     if not outbound:
         return None
@@ -509,6 +539,15 @@ def spawn_and_probe(raw_uri):
         ping_ms = int((time.time() - t0) * 1000)
 
         is_alive = (res.status_code == 204)
+        outbound_ip = None
+
+        if is_alive:
+            try:
+                r_ip = requests.get("https://api.ip.sb/geoip", proxies=proxies, timeout=1.8, verify=False)
+                if r_ip.status_code == 200:
+                    outbound_ip = r_ip.json().get("ip", "").strip()
+            except Exception:
+                pass
 
         try:
             proc.kill()
@@ -520,7 +559,12 @@ def spawn_and_probe(raw_uri):
             except Exception: pass
 
         if is_alive:
-            return raw_uri, ping_ms, None
+            with write_lock:
+                if outbound_ip:
+                    if outbound_ip in seen_outbound_ips:
+                        return None
+                    seen_outbound_ips.add(outbound_ip)
+            return raw_uri, ping_ms, outbound_ip
         return None
 
     except Exception:
@@ -620,8 +664,12 @@ def publish_file_to_github(repo_path, lines_list, commit_msg, timeout=60):
     return False
 
 def main():
+    ping_only = ("--ping-only" in sys.argv) or (os.environ.get("PING_ONLY") == "1")
+    mode_title = "PING-ONLY MODE (2-ROUND TCP CHECK)" if ping_only else "FULL SCAN MODE (2-ROUND TCP + CORE PROBE)"
+
     print("=" * 65, flush=True)
     print("   V2RAY CLOUD PRE-FILTER (GITHUB ACTIONS ULTRA RUNNER)   ", flush=True)
+    print(f"   Mode: {mode_title}", flush=True)
     print("=" * 65, flush=True)
 
     # Start live status background publisher
@@ -664,47 +712,55 @@ def main():
 
     print(f"[+] Unique configs after static dedup: {len(unique_items):,} (Dropped {len(raw_configs) - len(unique_items):,} duplicates!)", flush=True)
 
-    # Phase 2: TCP Handshake Probe
-    print(f"[*] Phase 2: High-speed TCP port handshake check (Workers: {MAX_TCP_WORKERS})...", flush=True)
-    update_status(phase="Phase 2: TCP Handshake Check", progress="15%")
+    # Phase 2: 2-Round TCP Handshake Probe (Round 1 all + Round 2 retry dead nodes)
+    t_tcp_start = time.time()
+    items_list = list(unique_items.items())
+
+    print(f"[*] Phase 2 (Round 1/2): High-speed TCP handshake on {len(items_list):,} configs (Workers: {MAX_TCP_WORKERS}, Timeout: {TCP_TIMEOUT}s)...", flush=True)
+    update_status(phase="Phase 2: TCP Check (Round 1/2)", progress="15%")
     publish_status_to_github()
 
-    tcp_survivors = []
-    t_tcp_start = time.time()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_TCP_WORKERS) as executor:
-        items_list = list(unique_items.items())
-        futs = [executor.submit(check_tcp_port, item) for item in items_list]
-        done_tcp = 0
-        total_tcp = len(items_list)
-        for f in concurrent.futures.as_completed(futs):
-            done_tcp += 1
-            if done_tcp % 3000 == 0 or done_tcp == total_tcp:
-                pct = done_tcp * 100 // total_tcp
-                print(f"    -> TCP progress: {done_tcp}/{total_tcp} ({pct}%) | Responding: {len(tcp_survivors)}", flush=True)
-                update_status(progress=f"TCP: {pct}% ({len(tcp_survivors)} active)")
-            res = f.result()
-            if res:
-                tcp_survivors.append(res)
+    r1_survivors, r1_failed = run_tcp_round(items_list, "R1/2", TCP_TIMEOUT, existing_count=0)
+    print(f"[+] Round 1/2 complete: {len(r1_survivors):,} responding | {len(r1_failed):,} dead queued for Round 2 retry.", flush=True)
 
+    r2_survivors = []
+    if r1_failed:
+        time.sleep(1.0)
+        r2_timeout = max(TCP_TIMEOUT, 2.2)
+        print(f"[*] Phase 2 (Round 2/2): Retrying {len(r1_failed):,} dead nodes (Timeout: {r2_timeout}s)...", flush=True)
+        update_status(phase="Phase 2: TCP Check (Round 2/2)", progress=f"Retrying {len(r1_failed):,} dead | Alive: {len(r1_survivors):,}")
+        publish_status_to_github()
+        r2_survivors, _ = run_tcp_round(r1_failed, "R2/2", r2_timeout, existing_count=len(r1_survivors))
+        print(f"[+] Round 2/2 recovered +{len(r2_survivors):,} additional responding nodes!", flush=True)
+
+    unique_tcp = list(dict.fromkeys(r1_survivors + r2_survivors))
+    tcp_survivors = unique_tcp
     tcp_elapsed = time.time() - t_tcp_start
-    print(f"[+] Responding TCP ports: {len(tcp_survivors):,} in {tcp_elapsed:.1f}s", flush=True)
+    print(f"[+] Total Responding TCP ports across 2 Rounds: {len(unique_tcp):,} in {tcp_elapsed:.1f}s", flush=True)
 
     # Save and publish TCP-checked (ping-checked) configs to temp -> final atomic file immediately
-    unique_tcp = list(dict.fromkeys(tcp_survivors))
     with open(TEMP_PING_FILE, "w", encoding="utf-8") as f_ping_tmp:
         for uri in unique_tcp:
             f_ping_tmp.write(uri + "\n")
     os.replace(TEMP_PING_FILE, PING_CHECKED_FILE)
     ping_size_kb = os.path.getsize(PING_CHECKED_FILE) / 1024 if os.path.exists(PING_CHECKED_FILE) else 0
     print(f"[+] Saved {PING_CHECKED_FILE} with {len(unique_tcp):,} TCP-checked configs ({ping_size_kb:.1f} KB).", flush=True)
-    update_status(phase="Uploading Ping-Checked List", progress=f"TCP: 100% ({len(unique_tcp)} active)")
+    update_status(phase="Uploading Ping-Checked List", progress=f"TCP 2-Round: 100% ({len(unique_tcp)} active)", alive_count=len(unique_tcp))
     publish_file_to_github(
         PING_CHECKED_FILE,
         unique_tcp,
-        f"Auto-update: fresh {PING_CHECKED_FILE} ({len(unique_tcp)} TCP alive)",
+        f"Auto-update: fresh {PING_CHECKED_FILE} ({len(unique_tcp)} TCP alive, 2 rounds)",
         timeout=90,
     )
     publish_status_to_github()
+
+    if ping_only:
+        print("=" * 65, flush=True)
+        print(f"✅ 100% COMPLETE (PING-ONLY MODE): {len(unique_tcp):,} TCP-checked configs ready in {tcp_elapsed:.1f}s!", flush=True)
+        print("=" * 65, flush=True)
+        update_status(status="completed", phase="Cloud Ping Filter Complete", progress="100%", alive_count=len(unique_tcp))
+        publish_status_to_github()
+        return
 
     # Phase 3: Core Probe via Xray/Sing-box (Chunked Batches with Automatic Process Cleanup)
     CHUNK_SIZE = 800
@@ -715,6 +771,7 @@ def main():
     publish_status_to_github()
 
     confirmed_alive = []
+    seen_outbound_ips = set()
     t_core_start = time.time()
     done_total = 0
 
@@ -735,7 +792,7 @@ def main():
 
         chunk_alive = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CORE_WORKERS) as executor:
-            futs = [executor.submit(spawn_and_probe, uri) for uri in current_chunk]
+            futs = [executor.submit(spawn_and_probe, uri, seen_outbound_ips) for uri in current_chunk]
             chunk_done = 0
             for f in concurrent.futures.as_completed(futs):
                 chunk_done += 1
