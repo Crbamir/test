@@ -434,7 +434,7 @@ def parse_uri_to_outbound(uri):
         pass
     return None, None
 
-def spawn_and_probe(raw_uri, seen_outbound_ips):
+def spawn_and_probe(raw_uri):
     core_type, outbound = parse_uri_to_outbound(raw_uri)
     if not outbound:
         return None
@@ -509,15 +509,6 @@ def spawn_and_probe(raw_uri, seen_outbound_ips):
         ping_ms = int((time.time() - t0) * 1000)
 
         is_alive = (res.status_code == 204)
-        outbound_ip = None
-
-        if is_alive:
-            try:
-                r_ip = requests.get("https://api.ip.sb/geoip", proxies=proxies, timeout=1.8, verify=False)
-                if r_ip.status_code == 200:
-                    outbound_ip = r_ip.json().get("ip", "").strip()
-            except Exception:
-                pass
 
         try:
             proc.kill()
@@ -529,12 +520,7 @@ def spawn_and_probe(raw_uri, seen_outbound_ips):
             except Exception: pass
 
         if is_alive:
-            with write_lock:
-                if outbound_ip:
-                    if outbound_ip in seen_outbound_ips:
-                        return None
-                    seen_outbound_ips.add(outbound_ip)
-            return raw_uri, ping_ms, outbound_ip
+            return raw_uri, ping_ms, None
         return None
 
     except Exception:
@@ -729,7 +715,6 @@ def main():
     publish_status_to_github()
 
     confirmed_alive = []
-    seen_outbound_ips = set()
     t_core_start = time.time()
     done_total = 0
 
@@ -750,7 +735,7 @@ def main():
 
         chunk_alive = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CORE_WORKERS) as executor:
-            futs = [executor.submit(spawn_and_probe, uri, seen_outbound_ips) for uri in current_chunk]
+            futs = [executor.submit(spawn_and_probe, uri) for uri in current_chunk]
             chunk_done = 0
             for f in concurrent.futures.as_completed(futs):
                 chunk_done += 1
