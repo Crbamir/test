@@ -1,9 +1,9 @@
 {
   "status": "running",
-  "phase": "Downloading 66 Subscriptions",
-  "progress": "0%",
+  "phase": "Static Deduplication",
+  "progress": "10%",
   "alive_count": 0,
-  "total_raw": 0,
-  "elapsed_sec": 1,
-  "timestamp": 1794334998
+  "total_raw": 168783,
+  "elapsed_sec": 4,
+  "timestamp": 1794335001
 }
