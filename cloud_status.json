@@ -1,9 +1,9 @@
 {
   "status": "running",
-  "phase": "Phase 2: TCP Handshake Check",
-  "progress": "TCP: 97% (28652 active)",
+  "phase": "Uploading Ping-Checked List",
+  "progress": "TCP: 100% (29137 active)",
   "alive_count": 0,
   "total_raw": 168833,
-  "elapsed_sec": 72,
-  "timestamp": 1794340589
+  "elapsed_sec": 82,
+  "timestamp": 1794340599
 }
