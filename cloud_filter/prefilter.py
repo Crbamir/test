@@ -30,6 +30,8 @@ SUBS_FILE = os.path.join(BASE_DIR, "subscriptions.txt")
 if not os.path.exists(SUBS_FILE):
     SUBS_FILE = "subscriptions.txt"
 
+PING_CHECKED_FILE = "ping_checked_configs.txt"
+TEMP_PING_FILE = "ping_checked_configs_temp.txt"
 OUTPUT_FILE = "alive_configs.txt"
 TEMP_OUTPUT_FILE = "alive_configs_temp.txt"
 
@@ -61,6 +63,7 @@ dns_lock = threading.Lock()
 
 # Global Live Status
 status_lock = threading.Lock()
+github_push_lock = threading.Lock()
 start_timestamp = time.time()
 live_status = {
     "status": "running",
@@ -87,29 +90,30 @@ def publish_status_to_github():
     repo = os.environ.get("GITHUB_REPOSITORY")
     if not token or not repo:
         return
-    try:
-        url = f"https://api.github.com/repos/{repo}/contents/cloud_status.json"
-        headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3+json"}
-        sha = None
+    with github_push_lock:
         try:
-            r_get = requests.get(url, headers=headers, timeout=5)
-            if r_get.status_code == 200:
-                sha = r_get.json().get("sha")
+            url = f"https://api.github.com/repos/{repo}/contents/cloud_status.json"
+            headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3+json"}
+            sha = None
+            try:
+                r_get = requests.get(url, headers=headers, timeout=5)
+                if r_get.status_code == 200:
+                    sha = r_get.json().get("sha")
+            except Exception:
+                pass
+
+            with status_lock:
+                payload_str = json.dumps(live_status, indent=2)
+
+            body = {
+                "message": f"Cloud status: {live_status.get('phase', 'update')}",
+                "content": base64.b64encode(payload_str.encode("utf-8")).decode("utf-8")
+            }
+            if sha:
+                body["sha"] = sha
+            requests.put(url, headers=headers, json=body, timeout=8)
         except Exception:
             pass
-
-        with status_lock:
-            payload_str = json.dumps(live_status, indent=2)
-
-        body = {
-            "message": f"Cloud status: {live_status.get('phase', 'update')}",
-            "content": base64.b64encode(payload_str.encode("utf-8")).decode("utf-8")
-        }
-        if sha:
-            body["sha"] = sha
-        requests.put(url, headers=headers, json=body, timeout=8)
-    except Exception:
-        pass
 
 def status_publisher_daemon():
     """Publishes live status to cloud_status.json every 25 seconds"""
@@ -564,46 +568,69 @@ def cleanup_zombies_and_temp():
     except Exception:
         pass
 
-def publish_alive_configs_to_github(confirmed_alive):
+def get_github_file_sha(repo, repo_path, headers):
+    """Fetch existing blob SHA safely, including files larger than 1 MB via directory fallback."""
+    url = f"https://api.github.com/repos/{repo}/contents/{repo_path}"
+    try:
+        r_get = requests.get(url, headers=headers, timeout=10)
+        if r_get.status_code == 200:
+            data = r_get.json()
+            if isinstance(data, dict) and data.get("sha"):
+                return data["sha"]
+    except Exception:
+        pass
+
+    try:
+        parent_dir = os.path.dirname(repo_path).replace("\\", "/")
+        dir_url = (
+            f"https://api.github.com/repos/{repo}/contents/{parent_dir}"
+            if parent_dir
+            else f"https://api.github.com/repos/{repo}/contents"
+        )
+        r_dir = requests.get(dir_url, headers=headers, timeout=12)
+        if r_dir.status_code == 200 and isinstance(r_dir.json(), list):
+            for item in r_dir.json():
+                if item.get("path") == repo_path:
+                    return item.get("sha")
+    except Exception:
+        pass
+    return None
+
+def publish_file_to_github(repo_path, lines_list, commit_msg, timeout=60):
     token = os.environ.get("GITHUB_TOKEN")
     repo = os.environ.get("GITHUB_REPOSITORY")
     if not token or not repo:
-        return
-    
-    content_str = "\n".join(confirmed_alive) + "\n"
+        return False
+
+    content_str = "\n".join(lines_list) + "\n"
     encoded_content = base64.b64encode(content_str.encode("utf-8")).decode("utf-8")
-    url = f"https://api.github.com/repos/{repo}/contents/alive_configs.txt"
+    url = f"https://api.github.com/repos/{repo}/contents/{repo_path}"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3+json"}
 
-    for attempt in range(5):
-        try:
-            sha = None
+    with github_push_lock:
+        for attempt in range(5):
             try:
-                r_get = requests.get(url, headers=headers, timeout=8)
-                if r_get.status_code == 200:
-                    sha = r_get.json().get("sha")
-            except Exception:
-                pass
-
-            body = {
-                "message": f"Auto-update: fresh alive_configs.txt ({len(confirmed_alive)} alive)",
-                "content": encoded_content
-            }
-            if sha:
-                body["sha"] = sha
-            res = requests.put(url, headers=headers, json=body, timeout=25)
-            if res.status_code in [200, 201]:
-                print(f"[+] Direct API push for alive_configs.txt succeeded ({len(confirmed_alive)} configs)", flush=True)
-                return True
-            elif res.status_code == 409:
-                print(f"[*] API push 409 conflict, retrying with fresh sha (attempt {attempt+1}/5)...", flush=True)
+                sha = get_github_file_sha(repo, repo_path, headers)
+                body = {
+                    "message": commit_msg,
+                    "content": encoded_content
+                }
+                if sha:
+                    body["sha"] = sha
+                res = requests.put(url, headers=headers, json=body, timeout=timeout)
+                if res.status_code in [200, 201]:
+                    print(f"[+] Direct API push for {repo_path} succeeded ({len(lines_list):,} configs)", flush=True)
+                    return True
+                elif res.status_code == 409:
+                    print(f"[*] API push 409 conflict on {repo_path}, retrying (attempt {attempt+1}/5)...", flush=True)
+                    time.sleep(1.5)
+                    continue
+                else:
+                    print(f"[-] Direct API push for {repo_path} status: {res.status_code}", flush=True)
+                    time.sleep(1.5)
+            except Exception as e:
+                print(f"[-] Direct API push for {repo_path} attempt {attempt+1} failed: {e}", flush=True)
                 time.sleep(1.5)
-                continue
-            else:
-                print(f"[-] Direct API push status: {res.status_code}", flush=True)
-        except Exception as e:
-            print(f"[-] Direct API push attempt {attempt+1} failed: {e}", flush=True)
-            time.sleep(1.5)
     return False
 
 def main():
@@ -675,6 +702,23 @@ def main():
 
     tcp_elapsed = time.time() - t_tcp_start
     print(f"[+] Responding TCP ports: {len(tcp_survivors):,} in {tcp_elapsed:.1f}s", flush=True)
+
+    # Save and publish TCP-checked (ping-checked) configs to temp -> final atomic file immediately
+    unique_tcp = list(dict.fromkeys(tcp_survivors))
+    with open(TEMP_PING_FILE, "w", encoding="utf-8") as f_ping_tmp:
+        for uri in unique_tcp:
+            f_ping_tmp.write(uri + "\n")
+    os.replace(TEMP_PING_FILE, PING_CHECKED_FILE)
+    ping_size_kb = os.path.getsize(PING_CHECKED_FILE) / 1024 if os.path.exists(PING_CHECKED_FILE) else 0
+    print(f"[+] Saved {PING_CHECKED_FILE} with {len(unique_tcp):,} TCP-checked configs ({ping_size_kb:.1f} KB).", flush=True)
+    update_status(phase="Uploading Ping-Checked List", progress=f"TCP: 100% ({len(unique_tcp)} active)")
+    publish_file_to_github(
+        PING_CHECKED_FILE,
+        unique_tcp,
+        f"Auto-update: fresh {PING_CHECKED_FILE} ({len(unique_tcp)} TCP alive)",
+        timeout=90,
+    )
+    publish_status_to_github()
 
     # Phase 3: Core Probe via Xray/Sing-box (Chunked Batches with Automatic Process Cleanup)
     CHUNK_SIZE = 800
@@ -757,7 +801,12 @@ def main():
         except Exception: pass
 
     # Publish clean final alive_configs.txt to GitHub
-    publish_alive_configs_to_github(unique_alive)
+    publish_file_to_github(
+        OUTPUT_FILE,
+        unique_alive,
+        f"Auto-update: fresh {OUTPUT_FILE} ({len(unique_alive)} alive)",
+        timeout=45,
+    )
     update_status(status="completed", phase="Cloud Filter Complete", progress="100%", alive_count=len(unique_alive))
     publish_status_to_github()
 
