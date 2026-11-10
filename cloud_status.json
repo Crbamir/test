@@ -1,9 +1,9 @@
 {
   "status": "running",
-  "phase": "Uploading Ping-Checked List",
-  "progress": "TCP: 100% (29137 active)",
+  "phase": "Phase 3: Core Probe (1/37 Batches)",
+  "progress": "50%",
   "alive_count": 0,
   "total_raw": 168833,
-  "elapsed_sec": 82,
-  "timestamp": 1794340599
+  "elapsed_sec": 89,
+  "timestamp": 1794340606
 }
