@@ -1,9 +1,10 @@
-name: Cloud Pre-Filter & Auto Tester
+name: Cloud Pre-Filter (Full 2-Round Ping + Core)
 
 on:
   workflow_dispatch:
   push:
     paths:
+      - '.trigger_full'
       - '.trigger'
 
 concurrency:
@@ -59,6 +60,6 @@ jobs:
           rm -rf sb.tar.gz sing-box-${SB_VER_CLEAN}-linux-amd64
           sing-box version
 
-      - name: Run Cloud Pre-Filter
+      - name: Run Cloud Pre-Filter (Full Scan)
         run: |
           python cloud_filter/prefilter.py
