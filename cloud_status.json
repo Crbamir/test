@@ -1,9 +1,9 @@
 {
   "status": "running",
-  "phase": "Static Deduplication",
-  "progress": "10%",
+  "phase": "Phase 2: TCP Check (Round 1/2)",
+  "progress": "15%",
   "alive_count": 0,
   "total_raw": 172943,
-  "elapsed_sec": 3,
-  "timestamp": 1794761591
+  "elapsed_sec": 8,
+  "timestamp": 1794761596
 }
