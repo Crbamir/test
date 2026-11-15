@@ -1,9 +1,9 @@
 {
   "status": "running",
   "phase": "Phase 2: TCP Check (Round 1/2)",
-  "progress": "15%",
+  "progress": "TCP R1/2: 22% (7796 active)",
   "alive_count": 0,
   "total_raw": 172943,
-  "elapsed_sec": 8,
-  "timestamp": 1794761596
+  "elapsed_sec": 23,
+  "timestamp": 1794761611
 }
