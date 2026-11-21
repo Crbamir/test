@@ -1,9 +1,9 @@
 {
   "status": "running",
-  "phase": "Phase 2: TCP Check (Round 1/2)",
-  "progress": "TCP R1/2: 94% (25329 active)",
+  "phase": "Phase 2: TCP Check (Round 2/2)",
+  "progress": "Retrying 21,836 dead | Alive: 25,873",
   "alive_count": 0,
   "total_raw": 175092,
-  "elapsed_sec": 65,
-  "timestamp": 1795260269
+  "elapsed_sec": 80,
+  "timestamp": 1795260284
 }
