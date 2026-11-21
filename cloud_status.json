@@ -1,9 +1,9 @@
 {
-  "status": "running",
-  "phase": "Uploading Ping-Checked List",
-  "progress": "TCP 2-Round: 100% (25954 active)",
+  "status": "completed",
+  "phase": "Cloud Ping Filter Complete",
+  "progress": "100%",
   "alive_count": 25954,
   "total_raw": 175092,
-  "elapsed_sec": 170,
-  "timestamp": 1795260375
+  "elapsed_sec": 174,
+  "timestamp": 1795260379
 }
