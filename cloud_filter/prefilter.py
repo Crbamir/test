@@ -227,7 +227,7 @@ def download_single_sub(url):
 
 def check_tcp_port(item, timeout_sec=TCP_TIMEOUT):
     key, raw_uri = item
-    proto, host, port_str, path, uid = key
+    proto, host, port_str = key[0], key[1], key[2]
     try:
         port = int(port_str)
         ip = resolve_host_cached(host)
@@ -708,7 +708,7 @@ def main():
     publish_status_to_github()
 
     # Phase 1: Static Deduplication
-    print("[*] Phase 1: Performing static deduplication (protocol, host, port, path, uuid)...", flush=True)
+    print("[*] Phase 1: Performing static deduplication (protocol, host, port, sni)...", flush=True)
     unique_items = {}
     for uri in raw_configs:
         key = extract_config_key(uri)
