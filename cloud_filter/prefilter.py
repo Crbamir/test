@@ -176,27 +176,32 @@ def extract_config_key(uri):
         return None
     try:
         if proto == "vmess":
-            b64_part = uri.split("://")[1].split("#")[0].strip()
+            b64_part = uri.split("://")[1].split("#")[0].split("?")[0].strip()
             raw_json = safe_b64decode(b64_part)
             data = json.loads(raw_json)
             host = str(data.get("add", "")).lower().strip()
             port = str(data.get("port", "")).strip()
-            path = str(data.get("path", "/")).lower().strip()
-            uid = str(data.get("id", "")).strip()
-            if host and port and uid:
-                return ("vmess", host, port, path, uid)
+            sni = str(data.get("sni") or data.get("host") or "").lower().strip()
+            if host and port:
+                return (proto, host, port, sni)
             return None
         else:
             clean_url = uri.split("#")[0].strip()
             parsed = urlparse(clean_url)
             if not parsed.hostname or not parsed.port:
+                if proto == "ss" and "@" not in clean_url:
+                    b64 = clean_url.split("://")[1].split("?")[0].strip()
+                    decoded = safe_b64decode(b64)
+                    if "@" in decoded:
+                        clean_url = f"ss://{decoded}"
+                        parsed = urlparse(clean_url)
+            if not parsed.hostname or not parsed.port:
                 return None
             host = parsed.hostname.lower().strip()
             port = str(parsed.port).strip()
-            uid = unquote(parsed.username or "").strip()
             q = parse_qs(parsed.query)
-            path = unquote(q.get("path", ["/"])[0]).lower().strip()
-            return (proto, host, port, path, uid)
+            sni = (q.get("sni") or q.get("host") or q.get("peer") or [""])[0].lower().strip()
+            return (proto, host, port, sni)
     except Exception:
         return None
 
@@ -829,7 +834,14 @@ def main():
     print("=" * 65, flush=True)
 
     # Scan 100% complete: Atomically place into main alive_configs.txt (replacing any previous scan results)
-    unique_alive = list(dict.fromkeys(confirmed_alive))
+    unique_alive_map = {}
+    for uri in confirmed_alive:
+        k = extract_config_key(uri)
+        if k and k not in unique_alive_map:
+            unique_alive_map[k] = uri
+        elif not k and uri not in unique_alive_map:
+            unique_alive_map[uri] = uri
+    unique_alive = list(unique_alive_map.values())
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f_out:
         for uri in unique_alive:
             f_out.write(uri + "\n")
